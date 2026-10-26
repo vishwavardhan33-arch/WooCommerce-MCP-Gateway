@@ -1,0 +1,89 @@
+# Defaults for the store chart. values-local.yaml / values-prod.yaml override only what differs.
+
+# ---------- public address ----------
+ingress:
+  enabled: true
+  className: ""          # "" = the cluster's default IngressClass (Traefik on k3d and k3s)
+  host: shop.localtest.me
+  annotations: {}        # e.g. cert-manager.io/cluster-issuer: letsencrypt (prod)
+  tls:
+    enabled: false
+    secretName: ""
+
+site:
+  scheme: http           # scheme of the PUBLIC url; "https" when TLS ends at the ingress
+  title: Demo Shop
+  adminUser: wpadmin
+  adminEmail: admin@example.com
+
+# ---------- workloads ----------
+wordpress:
+  image: { repository: wordpress, tag: 6.9-php8.3-apache, pullPolicy: IfNotPresent }
+  persistence: { size: 5Gi, storageClass: "" }   # "" = the cluster's default StorageClass
+  resources:
+    requests: { cpu: 200m, memory: 384Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+mariadb:
+  image: { repository: mariadb, tag: "11.4", pullPolicy: IfNotPresent }
+  database: wordpress
+  user: wordpress
+  persistence: { size: 5Gi, storageClass: "" }
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+# Pinned on purpose: the Job installs EXACTLY this version, so every environment gets the same plugin.
+woocommerce:
+  version: "10.9.4"
+
+# ---------- WooCommerce MCP server (apps/woo-mcp) ----------
+mcp:
+  enabled: true
+  replicas: 1            # stateless, so more replicas are safe
+  image: { repository: ghcr.io/OWNER/REPO/woo-mcp, tag: latest, pullPolicy: IfNotPresent }
+  logLevel: info
+  timeoutMs: 15000       # max wait for ONE call to the store
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+  # Only pods matching these labels, in this namespace, may connect to the MCP server.
+  networkPolicy:
+    gatewayNamespace: platform
+    gatewayPodLabels: { app: gateway }
+
+# ---------- provisioning hook Job ----------
+provision:
+  image: { repository: wordpress, tag: cli-2.12-php8.3, pullPolicy: IfNotPresent }
+  activeDeadlineSeconds: 900
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 768Mi }
+
+# The WordPress user the MCP server will act as, and where its Application Password is stored.
+mcpBot:
+  username: mcp-bot
+  appName: mcp-gateway   # label of the Application Password inside WordPress
+  secretName: ""         # "" = <fullname>-mcp-bot ; keys: username, password
+
+# ---------- secrets ----------
+# existingSecret set   -> the chart uses it and creates nothing (scripts/bootstrap-secrets.sh does this).
+# existingSecret empty -> the chart generates random values and keeps them across upgrades (via `lookup`).
+# Key names are fixed: db -> MYSQL_ROOT_PASSWORD, MYSQL_PASSWORD ; wpAdmin -> WP_ADMIN_PASSWORD ;
+# mcpAuth -> MCP_AUTH_TOKEN (the bearer token the gateway presents to the MCP server)
+secrets:
+  db: { existingSecret: "" }
+  wpAdmin: { existingSecret: "" }
+  mcpAuth: { existingSecret: "" }
+
+# ---------- demo data ----------
+seed:
+  products:
+    - { sku: SEED-TSHIRT, name: Classic T-Shirt, price: "19.99", description: Soft cotton tee. }
+    - { sku: SEED-MUG, name: Coffee Mug, price: "12.50", description: 350 ml ceramic mug. }
+    - { sku: SEED-TOTE, name: Canvas Tote Bag, price: "15.00", description: Sturdy everyday tote. }
+    - { sku: SEED-STICKERS, name: Sticker Pack, price: "4.99", description: Ten vinyl stickers. }
+
+# ---------- helm test ----------
+tests:
+  image: { repository: curlimages/curl, tag: 8.10.1 }

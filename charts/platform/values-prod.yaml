@@ -1,0 +1,12 @@
+# k3s on a VPS. Replace with your real domain (DNS A record pointing at the VPS).
+baseDomain: example.com
+# The images CI pushes: ghcr.io/<owner>/<repo>/<app> (lowercase), pinned to a commit sha.
+mcpFx:
+  image: { repository: ghcr.io/OWNER/REPO/mcp-fx, tag: latest }
+  mode: live
+mcpNotes:
+  image: { repository: ghcr.io/OWNER/REPO/mcp-notes, tag: latest }
+  persistence: { enabled: true, size: 1Gi, storageClass: "" }   # k3s default class is local-path
+secrets:
+  mcpFx: { existingSecret: mcp-fx }
+  mcpNotes: { existingSecret: mcp-notes }

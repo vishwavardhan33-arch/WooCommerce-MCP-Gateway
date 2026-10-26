@@ -1,0 +1,96 @@
+# A separate PVC (not a volumeClaimTemplate) because WordPress is a Deployment.
+# It holds /var/www/html: WordPress core, wp-config.php, plugins, uploads.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "store.fullname" . }}-wordpress
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "wordpress") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.wordpress.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.wordpress.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "store.fullname" . }}-wordpress
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "wordpress") | nindent 4 }}
+spec:
+  type: ClusterIP     # internal only; the public path is the Ingress
+  selector:
+    {{- include "store.selectorLabels" (dict "ctx" . "component" "wordpress") | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "store.fullname" . }}-wordpress
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "wordpress") | nindent 4 }}
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: the volume is ReadWriteOnce, so a rolling update would start the
+  # new pod while the old one still holds the volume and the new pod could hang.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "store.selectorLabels" (dict "ctx" . "component" "wordpress") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "store.labels" (dict "ctx" . "component" "wordpress") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false   # WordPress never talks to the Kubernetes API
+      securityContext:
+        # 33 = www-data in this (Debian) image. The official image starts as root, fixes file
+        # ownership, then Apache drops to www-data, so we cannot force runAsNonRoot here.
+        fsGroup: 33
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wordpress
+          image: "{{ .Values.wordpress.image.repository }}:{{ .Values.wordpress.image.tag }}"
+          imagePullPolicy: {{ .Values.wordpress.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            {{- include "store.wordpressEnv" . | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: wordpress-data
+              mountPath: /var/www/html
+          # /wp-login.php is cheap, needs PHP + database, and answers 302 before install, 200 after.
+          startupProbe:
+            httpGet: { path: /wp-login.php, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60      # first start copies WordPress into the empty volume
+          readinessProbe:
+            httpGet: { path: /wp-login.php, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /wp-login.php, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.wordpress.resources | nindent 12 }}
+      volumes:
+        - name: wordpress-data
+          persistentVolumeClaim:
+            claimName: {{ include "store.fullname" . }}-wordpress

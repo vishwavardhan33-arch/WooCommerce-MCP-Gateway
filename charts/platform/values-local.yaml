@@ -1,0 +1,13 @@
+# k3d on a laptop. *.localtest.me is public DNS that resolves to 127.0.0.1.
+baseDomain: localtest.me
+# Built locally and loaded into k3d (see apps/mcp-fx/README.md): no registry needed.
+mcpFx:
+  image: { repository: mcp-fx, tag: dev, pullPolicy: IfNotPresent }
+  mode: static             # offline and deterministic: demos and tests give the same answer every time
+mcpNotes:
+  image: { repository: mcp-notes, tag: dev, pullPolicy: IfNotPresent }
+  persistence: { enabled: false }   # emptyDir: `make demo-reset` / deleting the pod gives a fresh notebook
+# Created by scripts/bootstrap-secrets.sh from .env
+secrets:
+  mcpFx: { existingSecret: mcp-fx }
+  mcpNotes: { existingSecret: mcp-notes }

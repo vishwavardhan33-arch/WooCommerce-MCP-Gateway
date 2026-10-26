@@ -1,0 +1,153 @@
+{{- if .Values.mcpNotes.enabled }}
+# The notes MCP server (apps/mcp-notes). Internal only, like mcp-fx: ClusterIP Service, no Ingress,
+# and a NetworkPolicy that admits only the gateway's pods.
+#
+# Notes live in ONE SQLite file, so this Deployment is deliberately NOT scalable:
+#   - replicas is fixed at 1 (two pods writing one SQLite file over a shared volume is not safe);
+#   - strategy is Recreate: the old pod must stop before the new one starts, because a rolling
+#     update would briefly run two pods against the same volume.
+# Where the file lives is the only thing persistence changes:
+#   persistence.enabled=false -> emptyDir: survives container restarts, lost when the pod is deleted
+#   persistence.enabled=true  -> a PersistentVolumeClaim: survives pod replacement and upgrades
+{{- if .Values.mcpNotes.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "platform.fullname" . }}-mcp-notes
+  labels:
+    {{- include "platform.labels" (dict "ctx" . "component" "mcp-notes") | nindent 4 }}
+  annotations:
+    # The notes are data: `helm uninstall` must not delete them. (`make demo-reset` wipes PVCs on purpose.)
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.mcpNotes.persistence.storageClass }}
+  storageClassName: {{ .Values.mcpNotes.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.mcpNotes.persistence.size }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.fullname" . }}-mcp-notes
+  labels:
+    {{- include "platform.labels" (dict "ctx" . "component" "mcp-notes") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "platform.selectorLabels" (dict "ctx" . "component" "mcp-notes") | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "platform.fullname" . }}-mcp-notes
+  labels:
+    {{- include "platform.labels" (dict "ctx" . "component" "mcp-notes") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" (dict "ctx" . "component" "mcp-notes") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" (dict "ctx" . "component" "mcp-notes") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false   # it never talks to the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000                      # matches USER 1000 in docker/node-service.Dockerfile
+        runAsGroup: 1000
+        # Makes the mounted volume writable by group 1000. Without it a fresh PVC is owned by root
+        # and the non-root process could not create the database file.
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp-notes
+          image: "{{ .Values.mcpNotes.image.repository }}:{{ .Values.mcpNotes.image.tag }}"
+          imagePullPolicy: {{ .Values.mcpNotes.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: LOG_LEVEL
+              value: {{ .Values.mcpNotes.logLevel | quote }}
+            - name: NOTES_DB_PATH
+              value: /data/notes.db
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "platform.mcpNotesSecret" . }}
+                  key: MCP_AUTH_TOKEN
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true     # the root filesystem stays read-only; only /data below is writable
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          # /healthz = alive. /readyz also checks that the SQLite file can be queried.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.mcpNotes.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.mcpNotes.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "platform.fullname" . }}-mcp-notes
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.mcpNotes.emptyDirSizeLimit }}
+          {{- end }}
+---
+# Ingress rule: the single `from` entry has BOTH selectors, which means AND: a pod must carry the
+# gateway labels AND live in the gateway namespace. Policies match the POD port (3000).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.fullname" . }}-mcp-notes
+  labels:
+    {{- include "platform.labels" (dict "ctx" . "component" "mcp-notes") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "platform.selectorLabels" (dict "ctx" . "component" "mcp-notes") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.gatewayNamespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.gatewayPodLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 3000
+{{- end }}

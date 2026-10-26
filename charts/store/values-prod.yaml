@@ -1,0 +1,21 @@
+# k3s on a VPS. Replace the host with your real domain (DNS A record -> the VPS).
+ingress:
+  host: shop.example.com
+  tls:
+    enabled: true
+    # Must exist in the namespace: created by cert-manager, or by hand.
+    secretName: shop-tls
+site:
+  scheme: https          # TLS ends at Traefik, so the PUBLIC url is https even though pods speak http
+  adminEmail: admin@example.com
+wordpress:
+  persistence: { size: 20Gi, storageClass: "" }   # k3s default class is local-path
+mariadb:
+  persistence: { size: 10Gi, storageClass: "" }
+mcp:
+  # The image CI pushes: ghcr.io/<owner>/<repo>/woo-mcp (lowercase), pinned to a commit sha.
+  image: { repository: ghcr.io/OWNER/REPO/woo-mcp, tag: latest }
+secrets:
+  db: { existingSecret: store-db }
+  wpAdmin: { existingSecret: store-wordpress }
+  mcpAuth: { existingSecret: woo-mcp }

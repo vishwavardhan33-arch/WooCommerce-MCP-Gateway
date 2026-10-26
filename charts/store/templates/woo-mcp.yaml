@@ -1,0 +1,126 @@
+{{- if .Values.mcp.enabled }}
+# The WooCommerce MCP server (apps/woo-mcp). Internal only, by two independent layers:
+#   1. the Service is ClusterIP and there is deliberately NO Ingress for it;
+#   2. the NetworkPolicy below lets only the gateway's pods connect.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "store.fullname" . }}-woo-mcp
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "woo-mcp") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "store.selectorLabels" (dict "ctx" . "component" "woo-mcp") | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "store.fullname" . }}-woo-mcp
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "woo-mcp") | nindent 4 }}
+spec:
+  replicas: {{ .Values.mcp.replicas }}
+  selector:
+    matchLabels:
+      {{- include "store.selectorLabels" (dict "ctx" . "component" "woo-mcp") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "store.labels" (dict "ctx" . "component" "woo-mcp") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false   # it never talks to the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000                      # matches USER 1000 in docker/node-service.Dockerfile
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: woo-mcp
+          image: "{{ .Values.mcp.image.repository }}:{{ .Values.mcp.image.tag }}"
+          imagePullPolicy: {{ .Values.mcp.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: LOG_LEVEL
+              value: {{ .Values.mcp.logLevel | quote }}
+            # The store's in-cluster Service: plain HTTP, never leaves the cluster.
+            - name: WC_BASE_URL
+              value: "http://{{ include "store.fullname" . }}-wordpress"
+            - name: WC_TIMEOUT_MS
+              value: {{ .Values.mcp.timeoutMs | quote }}
+            # Written by the provisioning Job. Until that Job has run, this pod waits in
+            # CreateContainerConfigError and starts by itself once the Secret exists.
+            - name: WC_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "store.botSecret" . }}
+                  key: username
+            - name: WC_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "store.botSecret" . }}
+                  key: password
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "store.mcpAuthSecret" . }}
+                  key: MCP_AUTH_TOKEN
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true     # the server only writes to stdout
+            capabilities:
+              drop: ["ALL"]
+          # /healthz and /readyz need no token. They do not call the store (see apps/woo-mcp/src/app.ts).
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.mcp.resources | nindent 12 }}
+---
+# Ingress rule: the single `from` entry has BOTH selectors, which means AND: a pod must carry the
+# gateway labels AND live in the gateway namespace. (Two separate entries would mean OR.)
+# Policies match the POD port (3000), not the Service port (80).
+# Enforced by the CNI: k3s ships kube-router's network policy controller, so k3d and k3s enforce it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "store.fullname" . }}-woo-mcp
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "woo-mcp") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "store.selectorLabels" (dict "ctx" . "component" "woo-mcp") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.mcp.networkPolicy.gatewayNamespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.mcp.networkPolicy.gatewayPodLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 3000
+{{- end }}

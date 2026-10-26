@@ -1,0 +1,43 @@
+# Defaults shared by every environment. values-local.yaml / values-prod.yaml override only what differs.
+baseDomain: ""
+
+# ---------- demo MCP servers (internal only: ClusterIP, no Ingress, NetworkPolicy) ----------
+# Only pods matching these labels, in this namespace, may connect to them (the gateway).
+networkPolicy:
+  gatewayNamespace: platform
+  gatewayPodLabels: { app: gateway }
+
+# Currency conversion (apps/mcp-fx). Stateless, so more replicas are safe.
+mcpFx:
+  enabled: true
+  replicas: 1
+  image: { repository: ghcr.io/OWNER/REPO/mcp-fx, tag: latest, pullPolicy: IfNotPresent }
+  logLevel: info
+  mode: live                                       # live = Frankfurter API ; static = built-in offline table
+  frankfurterBaseUrl: https://api.frankfurter.dev/v1
+  timeoutMs: 10000                                 # max wait for ONE call to Frankfurter
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 192Mi }
+
+# Notes (apps/mcp-notes). One SQLite file, so exactly ONE pod (fixed in the template, not a value).
+mcpNotes:
+  enabled: true
+  image: { repository: ghcr.io/OWNER/REPO/mcp-notes, tag: latest, pullPolicy: IfNotPresent }
+  logLevel: info
+  persistence:
+    enabled: false          # false = emptyDir (lost when the pod is deleted) ; true = PersistentVolumeClaim
+    size: 1Gi
+    storageClass: ""        # "" = the cluster's default StorageClass
+  emptyDirSizeLimit: 256Mi  # only used when persistence.enabled is false
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+    limits: { cpu: 250m, memory: 192Mi }
+
+# ---------- secrets ----------
+# existingSecret set   -> the chart uses it and creates nothing (scripts/bootstrap-secrets.sh does this).
+# existingSecret empty -> the chart generates a random token and keeps it across upgrades (via `lookup`).
+# Key name is fixed: MCP_AUTH_TOKEN (the bearer token the gateway presents to the server).
+secrets:
+  mcpFx: { existingSecret: "" }
+  mcpNotes: { existingSecret: "" }

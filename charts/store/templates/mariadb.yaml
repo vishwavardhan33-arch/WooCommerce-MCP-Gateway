@@ -1,0 +1,107 @@
+# Headless Service: a StatefulSet needs one for its stable pod DNS name, and WordPress connects
+# to it by name. clusterIP None = no virtual IP, DNS answers with the pod IP directly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "store.fullname" . }}-mariadb
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "mariadb") | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "store.selectorLabels" (dict "ctx" . "component" "mariadb") | nindent 4 }}
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "store.fullname" . }}-mariadb
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "mariadb") | nindent 4 }}
+spec:
+  serviceName: {{ include "store.fullname" . }}-mariadb
+  replicas: 1   # a single primary; replication is out of scope
+  selector:
+    matchLabels:
+      {{- include "store.selectorLabels" (dict "ctx" . "component" "mariadb") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "store.labels" (dict "ctx" . "component" "mariadb") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false   # the database never talks to the Kubernetes API
+      securityContext:
+        # The official image supports running as its own non-root user (uid 999).
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999              # makes the volume writable by that user
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mariadb
+          image: "{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
+          imagePullPolicy: {{ .Values.mariadb.image.pullPolicy }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "store.dbSecret" . }}
+                  key: MYSQL_ROOT_PASSWORD
+            - name: MARIADB_DATABASE
+              value: {{ .Values.mariadb.database | quote }}
+            - name: MARIADB_USER
+              value: {{ .Values.mariadb.user | quote }}
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "store.dbSecret" . }}
+                  key: MYSQL_PASSWORD
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          # One real query over TCP (127.0.0.1). During first-time init the image runs a temporary
+          # server that only listens on a socket, so a TCP check does not report "ready" too early.
+          # --skip-ssl: the server has no TLS configured; newer clients otherwise insist on it.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "mariadb -h127.0.0.1 --skip-ssl -uroot -p\"$MARIADB_ROOT_PASSWORD\" -e 'SELECT 1'"]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60      # up to 5 minutes for the first initialisation
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mariadb -h127.0.0.1 --skip-ssl -uroot -p\"$MARIADB_ROOT_PASSWORD\" -e 'SELECT 1'"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "mariadb -h127.0.0.1 --skip-ssl -uroot -p\"$MARIADB_ROOT_PASSWORD\" -e 'SELECT 1'"]
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.mariadb.resources | nindent 12 }}
+  # The StatefulSet creates the PVC itself ("data-<name>-0") and keeps it when the pod is replaced.
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.mariadb.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.mariadb.persistence.size }}

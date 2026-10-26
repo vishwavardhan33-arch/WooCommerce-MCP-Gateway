@@ -1,0 +1,7 @@
+apiVersion: v2
+name: store
+description: One WooCommerce store - WordPress, MariaDB, and an idempotent provisioning hook Job
+type: application
+version: 0.1.0
+# WordPress image line this chart was written against (WooCommerce itself is pinned in values.yaml).
+appVersion: "6.9"

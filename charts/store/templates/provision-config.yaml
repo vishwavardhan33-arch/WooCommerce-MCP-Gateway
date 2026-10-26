@@ -1,0 +1,18 @@
+# Scripts live as real files under files/ (so they can be syntax-checked and read as code) and
+# are mounted into the hook Job and the test Pod.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "store.fullname" . }}-scripts
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "provision") | nindent 4 }}
+data:
+  provision.sh: |
+    {{- .Files.Get "files/provision.sh" | nindent 4 }}
+  seed.php: |
+    {{- .Files.Get "files/seed.php" | nindent 4 }}
+  bot.php: |
+    {{- .Files.Get "files/bot.php" | nindent 4 }}
+  rest-auth-test.sh: |
+    {{- .Files.Get "files/rest-auth-test.sh" | nindent 4 }}
+  products.json: {{ .Values.seed.products | toJson | quote }}

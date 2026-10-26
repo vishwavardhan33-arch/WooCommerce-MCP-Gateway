@@ -1,0 +1,39 @@
+# The Job's only Kubernetes API need: write ONE Secret (the bot's Application Password).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "store.fullname" . }}-provision
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "provision") | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "store.fullname" . }}-provision
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "provision") | nindent 4 }}
+rules:
+  # `create` cannot be limited by resourceNames (the object does not exist yet),
+  # so this one verb is namespace-wide.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  # Updating is limited to the single Secret this chart owns.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ include "store.botSecret" . | quote }}]
+    verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "store.fullname" . }}-provision
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "provision") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "store.fullname" . }}-provision
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "store.fullname" . }}-provision

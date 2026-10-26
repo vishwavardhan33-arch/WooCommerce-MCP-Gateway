@@ -1,0 +1,13 @@
+# k3d on a laptop. *.localtest.me is public DNS that resolves to 127.0.0.1.
+ingress:
+  host: shop.localtest.me
+site:
+  scheme: http
+# Built locally and loaded into k3d (see apps/woo-mcp/README.md): no registry needed.
+mcp:
+  image: { repository: woo-mcp, tag: dev, pullPolicy: IfNotPresent }
+# Created by scripts/bootstrap-secrets.sh from .env
+secrets:
+  db: { existingSecret: store-db }
+  wpAdmin: { existingSecret: store-wordpress }
+  mcpAuth: { existingSecret: woo-mcp }

@@ -1,0 +1,120 @@
+{{- if .Values.mcpFx.enabled }}
+{{- if not (has .Values.mcpFx.mode (list "live" "static")) }}
+{{- fail "mcpFx.mode must be \"live\" or \"static\"" }}
+{{- end }}
+# The currency MCP server (apps/mcp-fx). Internal only, by two independent layers:
+#   1. the Service is ClusterIP and there is deliberately NO Ingress for it;
+#   2. the NetworkPolicy below lets only the gateway's pods connect.
+# Stateless, so more replicas are safe.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform.fullname" . }}-mcp-fx
+  labels:
+    {{- include "platform.labels" (dict "ctx" . "component" "mcp-fx") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "platform.selectorLabels" (dict "ctx" . "component" "mcp-fx") | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "platform.fullname" . }}-mcp-fx
+  labels:
+    {{- include "platform.labels" (dict "ctx" . "component" "mcp-fx") | nindent 4 }}
+spec:
+  replicas: {{ .Values.mcpFx.replicas }}
+  selector:
+    matchLabels:
+      {{- include "platform.selectorLabels" (dict "ctx" . "component" "mcp-fx") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "platform.labels" (dict "ctx" . "component" "mcp-fx") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false   # it never talks to the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000                      # matches USER 1000 in docker/node-service.Dockerfile
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp-fx
+          image: "{{ .Values.mcpFx.image.repository }}:{{ .Values.mcpFx.image.tag }}"
+          imagePullPolicy: {{ .Values.mcpFx.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: LOG_LEVEL
+              value: {{ .Values.mcpFx.logLevel | quote }}
+            # live = ask Frankfurter (needs internet egress); static = built-in offline table.
+            - name: FX_MODE
+              value: {{ .Values.mcpFx.mode | quote }}
+            - name: FRANKFURTER_BASE_URL
+              value: {{ .Values.mcpFx.frankfurterBaseUrl | quote }}
+            - name: FX_TIMEOUT_MS
+              value: {{ .Values.mcpFx.timeoutMs | quote }}
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "platform.mcpFxSecret" . }}
+                  key: MCP_AUTH_TOKEN
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true     # the server only writes to stdout
+            capabilities:
+              drop: ["ALL"]
+          # /healthz and /readyz need no token. They do not call Frankfurter (see apps/mcp-fx/src/app.ts).
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.mcpFx.resources | nindent 12 }}
+---
+# Ingress rule: the single `from` entry has BOTH selectors, which means AND: a pod must carry the
+# gateway labels AND live in the gateway namespace. (Two separate entries would mean OR.)
+# Policies match the POD port (3000), not the Service port (80).
+# Enforced by the CNI: k3s ships kube-router's network policy controller, so k3d and k3s enforce it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "platform.fullname" . }}-mcp-fx
+  labels:
+    {{- include "platform.labels" (dict "ctx" . "component" "mcp-fx") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "platform.selectorLabels" (dict "ctx" . "component" "mcp-fx") | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.gatewayNamespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.gatewayPodLabels | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 3000
+{{- end }}

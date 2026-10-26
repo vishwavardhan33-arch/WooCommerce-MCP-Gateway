@@ -1,0 +1,27 @@
+{
+  "name": "@mcp-platform/gateway",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "test": "vitest run --passWithNoTests",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@node-rs/argon2": "^2.0.0",
+    "drizzle-orm": "^0.44.0",
+    "express": "^5.1.0",
+    "pg": "^8.13.0",
+    "pino": "^9.5.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.0",
+    "@types/express": "^5.0.0",
+    "@types/pg": "^8.11.0",
+    "drizzle-kit": "^0.31.0"
+  }
+}

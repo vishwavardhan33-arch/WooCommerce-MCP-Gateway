@@ -1,0 +1,14 @@
+# Local cluster: one k3s server node, host port 80 forwarded to the cluster load balancer.
+# Traefik is the Ingress controller bundled with k3s and is ON by default; do NOT add
+# --disable=traefik here. The same controller ships with k3s on the VPS, so Ingress
+# objects behave identically in both places.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: woo-mcp # keep in sync with CLUSTER in the Makefile
+servers: 1
+agents: 0
+ports:
+  - port: 80:80
+    nodeFilters:
+      - loadbalancer

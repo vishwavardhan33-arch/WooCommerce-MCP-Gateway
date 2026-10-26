@@ -1,0 +1,53 @@
+# `helm test <release>` runs this Pod: the acceptance check "a pod inside the cluster can call
+# /wp-json/wc/v3/products with the app password and get data".
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "store.fullname" . }}-test-rest-auth
+  labels:
+    {{- include "store.labels" (dict "ctx" . "component" "test") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100           # curl_user in the curlimages/curl image
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      command: ["sh", "/scripts/rest-auth-test.sh"]
+      env:
+        - name: WP_URL
+          value: "http://{{ include "store.fullname" . }}-wordpress"
+        - name: BOT_USER
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "store.botSecret" . }}
+              key: username
+        - name: BOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "store.botSecret" . }}
+              key: password
+        - name: MIN_PRODUCTS
+          value: {{ len .Values.seed.products | quote }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+      resources:
+        requests: { cpu: 10m, memory: 16Mi }
+        limits: { cpu: 200m, memory: 64Mi }
+  volumes:
+    - name: scripts
+      configMap:
+        name: {{ include "store.fullname" . }}-scripts
